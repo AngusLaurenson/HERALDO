@@ -21,7 +21,7 @@ import h5py
 import scipy as sp
 import re
 from scipy.ndimage.filters import convolve, gaussian_filter, gaussian_gradient_magnitude
-from skimage import io, feature, color, measure, draw, img_as_float, filters
+from skimage import io, feature, color, measure, draw, img_as_float, filters, exposure
 import scipy.fftpack as fftpack
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -89,6 +89,7 @@ def get_offset_ransac(data, sigma=2):
     return (model.params[1],model.params[0])
 
 def get_offset_hough(data, sigma=0, circles=20):
+
     # Load picture and detect edges
     image = data/sp.amax(data)
     edges = canny(image, sigma)
