@@ -50,7 +50,7 @@ class reconstructor():
         self.centre = [x,y]
 
     def manual_centre(self, x, y):
-        self.origin = [x,y]
+        self.centre = [x,y]
 
     def auto_angle(self, data, sigma=5):
         slope, intercept, r_value, p_value, std_err = sp.stats.linregress(
@@ -121,9 +121,6 @@ class reconstructor():
 
         # apply the reconstruction
         self.reconstruct()
-
-    # def save_array(self, data):
-        # generate name of save
 
     def save_image(self, name, data):
         plt.ioff
