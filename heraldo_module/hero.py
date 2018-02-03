@@ -27,8 +27,10 @@ class reconstructor():
 
     def sum_dif(self):
         # function left here in order to add in noise filtering
-        self.dif_data = self.raw_1 - self.raw_2;
-        self.sum_data = self.raw_1 + self.raw_2;
+        self.sum_data = self.raw_1/sp.amax(self.raw_1)\
+                        +self.raw_2/sp.amax(self.raw_2);
+        self.dif_data = self.raw_1/sp.amax(self.raw_1)\
+                        -self.raw_2/sp.amax(self.raw_2)
 
     def auto_centre(self, data, sigma=0, count=10):
         # hough transform to fit circles and vote
@@ -91,12 +93,12 @@ class reconstructor():
 
         self.magnetic = filtered_data
 
-    def display(self, data):
+    def display(self, data, cmap='coolwarm', linthresh=500):
         plt.figure()
         plt.imshow(data,
-            norm=colors.SymLogNorm(linthresh=0.03, linscale=0.03),
+            norm=colors.SymLogNorm(linthresh=linthresh),
             origin='lower',
-            cmap = 'plasma',
+            cmap = cmap,
             interpolation='none'
         )
         plt.show()
@@ -116,9 +118,18 @@ class reconstructor():
     def full_reconstruct(self):
         # check for subtracted 'dif_data', else generate
         # self.sum_dif() and check if callibration exists, if non try to auto detection
-        if (self.angle == 0.0): self.auto_angle();
-        if (self.centre == [0.0, 0.0]): self.auto_centre();
-
+        if hasattr(self, 'sum_data'):
+            pass
+        else:
+            self.sum_dif()
+        if hasattr(self, 'angle'):
+            pass
+        else:
+            self.auto_angle(self.sum_data)
+        if hasattr(self, 'centre'):
+            pass
+        else:
+            self.auto_centre(self.sum_data);
         # apply the reconstruction
         self.reconstruct()
 
