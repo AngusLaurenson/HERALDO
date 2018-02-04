@@ -1,7 +1,7 @@
 import h5py as hd
 import scipy as sp
 from skimage import feature, transform, color, exposure
-from scipy import ndimage, fftpack
+from scipy import ndimage, fftpack, optimize
 import matplotlib.pyplot as plt
 from matplotlib import colors
 import colorcet
@@ -12,11 +12,18 @@ class reconstructor():
         super(reconstructor, self).__init__()
         self.raw_1 = self.load_nxs_data(fnum1)
         self.raw_2 = self.load_nxs_data(fnum2)
+        self.sum_dif()
 
-    def load_nxs_data(self,fnum):
-        # convert file number into a file name
-        fname = 'scan_' + str(fnum) + '.nxs'
-        # open the nxs file
+    def load_nxs_data(self,fname):
+        # Accepts either file number or full name:
+        # if input is number, make file fname
+        if fname.isdigit() == True:
+            fnum = fname
+            fname = 'scan_' + str(fname) + '.nxs'
+        # else assume the input is file name and make number
+        else:
+            fnum = ''.join([a for a in fname if a.isdigit()])
+        # open the nxs file and roots around for the data array
         with hd.File(fname,'r') as f:
             # explore the contents and scan group
             group = [a for a in list(f.keys()) if a.find(str(fnum))][0]
@@ -26,11 +33,12 @@ class reconstructor():
             return sp.squeeze(f[group]['scan_data'][dset])
 
     def sum_dif(self):
-        # function left here in order to add in noise filtering
-        self.sum_data = self.raw_1/sp.amax(self.raw_1)\
-                        +self.raw_2/sp.amax(self.raw_2);
-        self.dif_data = self.raw_1/sp.amax(self.raw_1)\
-                        -self.raw_2/sp.amax(self.raw_2)
+        # optimising equalisation of input images to maximise signal to noise ratio, remove non magnetic signals
+        def sum_abs_dif_data(ratio):
+            return sp.sum(sp.absolute(self.raw_1 - ratio * self.raw_2))
+        ratio = optimize.minimize(sum_abs_dif_data, 1).x[0]
+        self.dif_data = self.raw_1 - ratio * self.raw_2
+        self.sum_data = self.raw_1 + self.raw_2
 
     def auto_centre(self, data, sigma=0, count=10):
         # hough transform to fit circles and vote
@@ -43,16 +51,9 @@ class reconstructor():
         hough_res = transform.hough_circle(edges, hough_radii)
 
         accums, cx, cy, radii = transform.hough_circle_peaks(hough_res, hough_radii,total_num_peaks=count)
-        # Calculate the average consensus of the fitted circles
-        x=0;y=0;
-        image = color.gray2rgb(image)
-        for center_y, center_x, radius in zip(cy, cx, radii):
-            x = x + center_x; y = y + center_y
-        x = x/count; y = y/count
-        self.centre = [x,y]
 
-    def manual_centre(self, x, y):
-        self.centre = [x,y]
+        self.centre = [sp.mean(cx),sp.mean(cy)]
+        self.centre_radius = sp.mean(radii)
 
     def auto_angle(self, data, sigma=5):
         slope, intercept, r_value, p_value, std_err = sp.stats.linregress(
@@ -74,6 +75,13 @@ class reconstructor():
         plt.scatter(*self.centre,marker='+',color='red')
         plt.plot(y,x,'r--')
         plt.show()
+
+    # def beam_stop_blur(self, data):
+    #     cx, cy = *self.centre
+    #     x = sp.arange(data.shape[0]) - cx;
+    #     y = sp.arange(data.shape[1]) - cy;
+    #
+    #     sp.ones(shape=)
 
     # perform filtering, inverse fourier transform and phase phase_correction
     # requires prior callibration
@@ -103,7 +111,7 @@ class reconstructor():
         )
         plt.show()
 
-    def phase_amp_data(self,data):
+    def phase_amp_data(self, data):
         # generate phase color array
         norm = plt.Normalize()
         phase_colors = colorcet.cm['cyclic_mygbm_30_95_c78_s25'](norm(sp.angle(data)))
@@ -114,6 +122,16 @@ class reconstructor():
         phase_amplitude = phase_colors*amplitude_colors
         # return
         return phase_amplitude
+
+    def max_contrast(self):
+    # rotate the reconstructed magnetic contrast
+    # in the complex plane by a constant phase
+    # such that the power in the real domain is maximised
+        def sum_abs_imag(angle):
+            temp = sp.exp(1j*angle) * self.magnetic
+            return sp.sum(sp.absolute(temp))
+        angle = optimize.minimize(sum_abs_imag, 0.1).x[0]
+        return self.magnetic * sp.exp(1j*angle)
 
     def full_reconstruct(self):
         # check for subtracted 'dif_data', else generate
@@ -129,7 +147,10 @@ class reconstructor():
         if hasattr(self, 'centre'):
             pass
         else:
-            self.auto_centre(self.sum_data);
+            try:
+                self.auto_centre(self.sum_data);
+            except:
+                print('failed to fit centre automatically\n set manually\n')
         # apply the reconstruction
         self.reconstruct()
 
