@@ -60,10 +60,6 @@ class reconstructor():
         sp.arange(data.shape[0]), sp.argmax(ndimage.gaussian_filter(data,sigma), axis=1))
         self.angle = sp.arctan(slope)
 
-    def manual_angle(self, angle):
-        print('\nwhy are you using this function? \n')
-        self.angle = angle
-
     def display_callibration(self):
         # calculate the fit line from callibration parameters
         x = sp.arange(self.sum_data.shape[0])
@@ -76,12 +72,12 @@ class reconstructor():
         plt.plot(y,x,'r--')
         plt.show()
 
-    # def beam_stop_blur(self, data):
-    #     cx, cy = *self.centre
-    #     x = sp.arange(data.shape[0]) - cx;
-    #     y = sp.arange(data.shape[1]) - cy;
-    #
-    #     sp.ones(shape=)
+    def beam_stop_blur(self, data, sigma=3):
+        index = sp.indices(self.sum_data.shape)
+        index[0,:,:] = index[0,:,:] - self.centre[1]
+        index[1,:,:] = index[1,:,:] - self.centre[0]
+        mask = 1-ndimage.gaussian_filter(sp.where(sp.sum(index**2, axis=0)>self.centre_radius**2+40, 0.0, 1.0), sigma)
+        return data*mask
 
     # perform filtering, inverse fourier transform and phase phase_correction
     # requires prior callibration
