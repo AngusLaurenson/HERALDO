@@ -1,5 +1,6 @@
 import h5py as hd
 import scipy as sp
+import fabio
 from skimage import feature, transform, color, exposure
 from scipy import ndimage, fftpack, optimize
 import matplotlib.pyplot as plt
@@ -8,11 +9,23 @@ import colorcet
 
 class reconstructor():
     """docstring for reconstructor."""
-    def __init__(self, fnum1, fnum2):
+    def __init__(self, fname1, fname2):
         super(reconstructor, self).__init__()
-        self.raw_1 = self.load_nxs_data(fnum1)
-        self.raw_2 = self.load_nxs_data(fnum2)
+        self.raw_1 = self.load_data(fname1)
+        self.raw_2 = self.load_data(fname2)
         self.sum_dif()
+
+    # logic to open any data File
+    def load_data(self, fname):
+        try:
+            return fabio.open(fname).data
+        except:
+            pass
+        try:
+            return self.load_nxs_data(fname)
+        except:
+            print('failure to read data')
+            pass
 
     def load_nxs_data(self,fname):
         # Accepts either file number or full name:
@@ -34,9 +47,14 @@ class reconstructor():
 
     def sum_dif(self):
         # optimising equalisation of input images to maximise signal to noise ratio, remove non magnetic signals
+
+        # this section does not cancel out the aperture in the magnetic images
+        # it is likely that normalising over a subset of the image would be better
         def sum_abs_dif_data(ratio):
-            return sp.sum(sp.absolute(self.raw_1 - ratio * self.raw_2))
+
+            return sp.sum(sp.absolute(self.raw_1[610-150:610+150,706-75:706+75] - ratio * self.raw_2[610-150:610+150,706-75:706+75]))
         ratio = optimize.minimize(sum_abs_dif_data, 1).x[0]
+        print(ratio)
         self.dif_data = self.raw_1 - ratio * self.raw_2
         self.sum_data = self.raw_1 + self.raw_2
 
@@ -66,36 +84,44 @@ class reconstructor():
         c = self.centre[0] - self.angle*self.centre[1]
         y = sp.sin(self.angle)*x + c
 
-        plt.figure(figsize = (10,10));
+        plt.figure();
         plt.imshow(self.sum_data, cmap = 'plasma')
-        plt.scatter(*self.centre,marker='+',color='red')
-        plt.plot(y,x,'r--')
+        plt.scatter(*self.centre,marker='x',color='orange')
+        plt.plot(y,x,'g--')
         plt.show()
 
     def beam_stop_blur(self, data, sigma=3):
         index = sp.indices(self.sum_data.shape)
         index[0,:,:] = index[0,:,:] - self.centre[1]
         index[1,:,:] = index[1,:,:] - self.centre[0]
-        mask = 1-ndimage.gaussian_filter(sp.where(sp.sum(index**2, axis=0)>self.centre_radius**2+40, 0.0, 1.0), sigma)
+
+        mask = 1-ndimage.gaussian_filter(sp.where(sp.sum(index**2, axis=0)>(2*self.centre_radius)**2+40, 0.0, 1.0), sigma)
         return data*mask
 
     # perform filtering, inverse fourier transform and phase phase_correction
     # requires prior callibration
-    def reconstruct(self):
+    def differential_filtering(self, data):
         # differential_filter
-        x,y = sp.meshgrid(sp.arange(self.sum_data.shape[0]),
-                      sp.arange(self.sum_data.shape[1]))
-        diff_filter = sp.pi * 2 * (+sp.cos(self.angle)*(x-self.centre[0]) \
+        x,y = sp.meshgrid(sp.arange(data.shape[1]),
+                      sp.arange(data.shape[0]))
+        self.diff_filter = sp.pi * 2 * (+sp.cos(self.angle)*(x-self.centre[0]) \
         -sp.sin(self.angle)*(y-self.centre[1]))
 
         # apply differential_filter
-        filtered_data = self.dif_data * diff_filter
-        # fourier transform
-        filtered_data = fftpack.fftshift(fftpack.fft2(filtered_data))
-        # phase correct for offset fourier transform
-        filtered_data = filtered_data * sp.exp(1j*2*sp.pi*(self.centre[0] * x / self.sum_data.shape[0] + self.centre[1] * y / self.sum_data.shape[1]))
+        filtered_data = data * self.diff_filter
+        return  filtered_data
 
-        self.magnetic = filtered_data
+    def fourier_2D(self, data):
+        # fourier transform
+        return fftpack.fftshift(fftpack.fft2(data),axes=(0,1))
+
+    def offset_correction(self, data):
+        # phase correct for offset fourier transform
+        x,y = sp.meshgrid(sp.arange(data.shape[1]),
+                      sp.arange(data.shape[0]))
+
+        data = data * sp.exp(1j*2*sp.pi*(self.centre[0] * x / self.sum_data.shape[0] + self.centre[1] * y / self.sum_data.shape[1]))
+        return data
 
     def display(self, data, cmap='coolwarm', linthresh=500):
         plt.figure()
@@ -127,11 +153,13 @@ class reconstructor():
             temp = sp.exp(1j*angle) * self.magnetic
             return sp.sum(sp.absolute(temp))
         angle = optimize.minimize(sum_abs_imag, 0.1).x[0]
+        print(angle)
         return self.magnetic * sp.exp(1j*angle)
 
-    def full_reconstruct(self):
+    def reconstruct(self, blur = False):
         # check for subtracted 'dif_data', else generate
-        # self.sum_dif() and check if callibration exists, if non try to auto detection
+        # self.sum_dif() and check if callibration exists,
+        # if non try to auto detection
         if hasattr(self, 'sum_data'):
             pass
         else:
@@ -147,8 +175,29 @@ class reconstructor():
                 self.auto_centre(self.sum_data);
             except:
                 print('failed to fit centre automatically\n set manually\n')
-        # apply the reconstruction
-        self.reconstruct()
+
+        # beam stop blurr application to the images
+        if blur:
+            dif = self.beam_stop_blur(self.dif_data)
+            sum = self.beam_stop_blur(self.sum_data)
+        else:
+            pass
+
+        # apply differential filter
+        dif = self.differential_filtering(self.dif_data)
+        sum = self.differential_filtering(self.sum_data)
+
+        # 2D transform
+        dif = self.fourier_2D(dif)
+        sum = self.fourier_2D(sum)
+
+        # offset correction
+        dif = self.offset_correction(dif)
+        sum = self.offset_correction(sum)
+
+        # assign attributes
+        self.magnetic = dif
+        self.charge = sum
 
     def save_image(self, name, data):
         plt.ioff
