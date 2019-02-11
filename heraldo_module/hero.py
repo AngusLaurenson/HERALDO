@@ -13,7 +13,6 @@ class reconstructor():
         super(reconstructor, self).__init__()
         self.raw_1 = self.load_data(fname1)
         self.raw_2 = self.load_data(fname2)
-        self.sum_dif()
 
     # logic to open any data File
     def load_data(self, fname):
@@ -45,18 +44,22 @@ class reconstructor():
             # make name for variable
             return sp.squeeze(f[group]['scan_data'][dset])
 
-    def sum_dif(self):
+    def sum_dif(self, equalisation=False):
         # optimising equalisation of input images to maximise signal to noise ratio, remove non magnetic signals
 
         # this section does not cancel out the aperture in the magnetic images
         # it is likely that normalising over a subset of the image would be better
-        def sum_abs_dif_data(ratio):
+        if equalisation:
+            def sum_abs_dif_data(ratio):
+                return sp.sum(sp.absolute(self.raw_1[610-150:610+150,706-75:706+75] - ratio * self.raw_2[610-150:610+150,706-75:706+75]),axis=(0,1))
 
-            return sp.sum(sp.absolute(self.raw_1[610-150:610+150,706-75:706+75] - ratio * self.raw_2[610-150:610+150,706-75:706+75]))
-        ratio = optimize.minimize(sum_abs_dif_data, 1).x[0]
-        print(ratio)
+            ratio = optimize.minimize(sum_abs_dif_data, 1).x[0]
+            print(ratio)
+        else:
+            ratio = 1
+
         self.dif_data = self.raw_1 - ratio * self.raw_2
-        self.sum_data = self.raw_1 + self.raw_2
+        self.sum_data = self.raw_1 + ratio * self.raw_2
 
     def auto_centre(self, data, sigma=0, count=10):
         # hough transform to fit circles and vote
@@ -98,6 +101,20 @@ class reconstructor():
         mask = 1-ndimage.gaussian_filter(sp.where(sp.sum(index**2, axis=0)>(2*self.centre_radius)**2+40, 0.0, 1.0), sigma)
         return data*mask
 
+    def beam_stop_stopper(self, data, sigma=5, edge=60):
+        '''Uses circular smoothed mask to cutout beamstop at centre'''
+        radius = self.centre_radius + edge
+        # setup the metric space and empty mask
+        position = sp.array(self.centre)
+        indices = sp.indices(data.shape)
+        mask = sp.zeros(data.shape)
+        # filled circle of ones at the centre
+        mask[sp.where(sp.sum((indices-position[:,None,None])**2,axis=0) < radius**2)] = 1
+        # smooth the circle of ones out
+        mask = sp.ndimage.gaussian_filter(mask,sigma)
+        # apply inverse mask to the data and return
+        return data * (1 - mask/sp.amax(mask))
+
     # perform filtering, inverse fourier transform and phase phase_correction
     # requires prior callibration
     def differential_filtering(self, data):
@@ -123,7 +140,7 @@ class reconstructor():
         data = data * sp.exp(1j*2*sp.pi*(self.centre[0] * x / self.sum_data.shape[0] + self.centre[1] * y / self.sum_data.shape[1]))
         return data
 
-    def display(self, data, cmap='coolwarm', linthresh=500):
+    def display(self, data, cmap='coolwarm', linthresh=10):
         plt.figure()
         plt.imshow(data,
             norm=colors.SymLogNorm(linthresh=linthresh),
@@ -153,39 +170,38 @@ class reconstructor():
             temp = sp.exp(1j*angle) * self.magnetic
             return sp.sum(sp.absolute(temp))
         angle = optimize.minimize(sum_abs_imag, 0.1).x[0]
-        print(angle)
         return self.magnetic * sp.exp(1j*angle)
 
-    def reconstruct(self, blur = False):
+    def reconstruct(self, blur = True):
         # check for subtracted 'dif_data', else generate
         # self.sum_dif() and check if callibration exists,
         # if non try to auto detection
         if hasattr(self, 'sum_data'):
             pass
         else:
+            # create sum and difference images with automatic equalisation
             self.sum_dif()
         if hasattr(self, 'angle'):
             pass
         else:
+            # calcualte automatically the angle of diffraction line
             self.auto_angle(self.sum_data)
         if hasattr(self, 'centre'):
             pass
         else:
             try:
+                # find centre of diffraction rings
                 self.auto_centre(self.sum_data);
             except:
                 print('failed to fit centre automatically\n set manually\n')
 
         # beam stop blurr application to the images
-        if blur:
-            dif = self.beam_stop_blur(self.dif_data)
-            sum = self.beam_stop_blur(self.sum_data)
-        else:
-            pass
+        dif = self.beam_stop_stopper(self.dif_data, 10, 50)
+        sum = self.beam_stop_stopper(self.sum_data, 10, 50)
 
         # apply differential filter
-        dif = self.differential_filtering(self.dif_data)
-        sum = self.differential_filtering(self.sum_data)
+        dif = self.differential_filtering(dif)
+        sum = self.differential_filtering(sum)
 
         # 2D transform
         dif = self.fourier_2D(dif)
