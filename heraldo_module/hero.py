@@ -31,7 +31,7 @@ class reconstructor():
         # if input is number, make file fname
         if fname.isdigit() == True:
             fnum = fname
-            fname = 'scan_' + str(fname) + '.nxs'
+            fname = 'scanx_' + str(fname) + '.nxs'
         # else assume the input is file name and make number
         else:
             fnum = ''.join([a for a in fname if a.isdigit()])
@@ -44,22 +44,24 @@ class reconstructor():
             # make name for variable
             return sp.squeeze(f[group]['scan_data'][dset])
 
-    def sum_dif(self, equalisation=False):
+    def sum_dif(self, equalisation=True):
         # optimising equalisation of input images to maximise signal to noise ratio, remove non magnetic signals
 
         # this section does not cancel out the aperture in the magnetic images
         # it is likely that normalising over a subset of the image would be better
-        if equalisation:
+        if equalisation is True and hasattr(self, 'ratio') is False:
             def sum_abs_dif_data(ratio):
-                return sp.sum(sp.absolute(self.raw_1[610-150:610+150,706-75:706+75] - ratio * self.raw_2[610-150:610+150,706-75:706+75]),axis=(0,1))
+                return sp.sum(sp.absolute(self.raw_1[:500,1500:] - ratio * self.raw_2[:500,1500:]),axis=(0,1))
 
             ratio = optimize.minimize(sum_abs_dif_data, 1).x[0]
-            print(ratio)
-        else:
-            ratio = 1
+            self.ratio = ratio
 
-        self.dif_data = self.raw_1 - ratio * self.raw_2
-        self.sum_data = self.raw_1 + ratio * self.raw_2
+        elif equalisation is False:
+            self.ratio = 1
+
+        self.dif_data = self.raw_1 - self.ratio * self.raw_2
+        self.sum_data = self.raw_1 + self.ratio * self.raw_2
+        self.div_data = self.raw_1/self.raw_2
 
     def auto_centre(self, data, sigma=0, count=10):
         # hough transform to fit circles and vote
@@ -162,17 +164,17 @@ class reconstructor():
         # return
         return phase_amplitude
 
-    def max_contrast(self):
+    def max_contrast(self, data):
     # rotate the reconstructed magnetic contrast
     # in the complex plane by a constant phase
     # such that the power in the real domain is maximised
         def sum_abs_imag(angle):
-            temp = sp.exp(1j*angle) * self.magnetic
+            temp = sp.exp(1j*angle) * data
             return sp.sum(sp.absolute(temp))
         angle = optimize.minimize(sum_abs_imag, 0.1).x[0]
-        return self.magnetic * sp.exp(1j*angle)
+        return data * sp.exp(1j*angle)
 
-    def reconstruct(self, blur = True):
+    def reconstruct(self, blur = True, equalisation=True):
         # check for subtracted 'dif_data', else generate
         # self.sum_dif() and check if callibration exists,
         # if non try to auto detection
@@ -180,7 +182,7 @@ class reconstructor():
             pass
         else:
             # create sum and difference images with automatic equalisation
-            self.sum_dif()
+            self.sum_dif(equalisation=equalisation)
         if hasattr(self, 'angle'):
             pass
         else:
@@ -195,25 +197,33 @@ class reconstructor():
             except:
                 print('failed to fit centre automatically\n set manually\n')
 
-        # beam stop blurr application to the images
-        dif = self.beam_stop_stopper(self.dif_data, 10, 50)
-        sum = self.beam_stop_stopper(self.sum_data, 10, 50)
+        # define intermediate data arrays
+        dif = self.dif_data.copy()
+        sum = self.sum_data.copy()
+        div = self.div_data.copy()
 
-        # apply differential filter
+        # beam stop blurr application to the images
+        dif = self.beam_stop_stopper(dif, 10, 50)
+        sum = self.beam_stop_stopper(sum, 10, 50)
+        div = self.beam_stop_stopper(div, 10, 50)
+
         dif = self.differential_filtering(dif)
         sum = self.differential_filtering(sum)
+        div = self.differential_filtering(div)
 
-        # 2D transform
         dif = self.fourier_2D(dif)
         sum = self.fourier_2D(sum)
+        div = self.fourier_2D(div)
 
-        # offset correction
         dif = self.offset_correction(dif)
         sum = self.offset_correction(sum)
+        div = self.offset_correction(div)
+
 
         # assign attributes
         self.magnetic = dif
         self.charge = sum
+        self.magnetic_div = div
 
     def save_image(self, name, data):
         plt.ioff
