@@ -34,13 +34,13 @@ class reconstructor():
             fname = 'scanx_' + str(fname) + '.nxs'
         # else assume the input is file name and make number
         else:
-            fnum = ''.join([a for a in fname if a.isdigit()])
+            fnum = ''.join([a for a in fname.split('/')[-1] if a.isdigit()])
         # open the nxs file and roots around for the data array
         with hd.File(fname,'r') as f:
             # explore the contents and scan group
             group = [a for a in list(f.keys()) if a.find(str(fnum))][0]
             # explore the contents of the scan data and find nonzero array
-            dset = [a for a in list(f[group]['scan_data'].keys()) if sp.squeeze(f[group]['scan_data'][a].size >= 10)][0]
+            dset = [a for a in list(f[group]['scan_data'].keys()) if sp.squeeze(f[group]['scan_data'][a].size >= 200)][0]
             # make name for variable
             return sp.squeeze(f[group]['scan_data'][dset])
 
@@ -164,15 +164,18 @@ class reconstructor():
         # return
         return phase_amplitude
 
-    def max_contrast(self, data):
-    # rotate the reconstructed magnetic contrast
-    # in the complex plane by a constant phase
-    # such that the power in the real domain is maximised
-        def sum_abs_imag(angle):
-            temp = sp.exp(1j*angle) * data
-            return sp.sum(sp.absolute(temp))
-        angle = optimize.minimize(sum_abs_imag, 0.1).x[0]
-        return data * sp.exp(1j*angle)
+    def max_real(self, data):
+        angles = sp.ravel(sp.angle(data))
+        amplitudes = sp.ravel(sp.absolute(data))
+        zipped = list(zip(angles,amplitudes))
+        res = sorted(zipped, key = lambda x : x[0])
+        angles, amplitudes = list(zip(*res))
+        filtered = sp.ndimage.gaussian_filter1d(amplitudes, 100, mode='wrap')
+    #     print(angles[sp.where(filtered == sp.amax(filtered))[0][0]])
+        return angles[sp.where(filtered == sp.amax(filtered))[0][0]], angles, amplitudes
+        
+        
+        return angle, angle2
 
     def reconstruct(self, blur = True, equalisation=True):
         # check for subtracted 'dif_data', else generate
